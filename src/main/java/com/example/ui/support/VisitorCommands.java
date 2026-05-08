@@ -23,29 +23,27 @@ import java.util.stream.IntStream;
  *       auto-generates all test data. A test writer can call
  *       {@code VisitorCommands.visitArticleFeed(page, mocker)} with no other setup.</li>
  *   <li><strong>Full override capability</strong> — every method has an overloaded form
- *       accepting generators/models, so a test only needs to specify what matters
- *       for that particular scenario.</li>
- *   <li><strong>Single entry point</strong> — test code never instantiates Visitor classes
- *       directly. All page navigation flows through this class.</li>
- *   <li><strong>Works outside Cucumber</strong> — usable in plain JUnit 5 tests, not just
- *       via Gherkin steps in {@code NavigationSteps}.</li>
+ *       accepting generators/models, so a test only needs to specify what matters.</li>
+ *   <li><strong>Single entry point</strong> — test code (both Cucumber steps and JUnit 5
+ *       tests) never instantiates Visitor classes directly. All navigation flows through
+ *       this class.</li>
+ *   <li><strong>AppInitMocker always wired</strong> — visitors called from here always
+ *       register auth + health-check bootstrap mocks before navigating.</li>
  * </ul>
  *
  * <h2>Usage in JUnit 5 tests</h2>
  * <pre>{@code
- * @ExtendWith(SomePlaywrightExtension.class)
+ * @ExtendWith(UiTestExtension.class)
  * class ArticleDetailTest {
  *
  *     @Test
  *     void titleIsDisplayed(Page page, RequestMocker mocker) {
- *         // Zero-config — a default article is auto-generated
  *         VisitorCommands.visitArticleDetail(page, mocker);
  *         assertThat(new ArticleDetailPage(page).getTitle()).isNotBlank();
  *     }
  *
  *     @Test
  *     void specificTitleIsDisplayed(Page page, RequestMocker mocker) {
- *         // Single-field override — only specify what matters
  *         VisitorCommands.visitArticleDetail(page, mocker,
  *                 ArticleGenerator.create().withTitle("Test-Driven Java"));
  *         assertThat(new ArticleDetailPage(page).getTitle()).isEqualTo("Test-Driven Java");
@@ -53,14 +51,12 @@ import java.util.stream.IntStream;
  *
  *     @Test
  *     void feedShowsCorrectArticleCount(Page page, RequestMocker mocker) {
- *         // Override article count
  *         VisitorCommands.visitArticleFeed(page, mocker, 5);
  *         assertThat(new ArticleFeedPage(page).getArticleCount()).isEqualTo(5);
  *     }
  *
  *     @Test
  *     void specificArticlesAreShown(Page page, RequestMocker mocker) {
- *         // Override with a specific article list
  *         List<ArticleModel> articles = List.of(
  *                 ArticleGenerator.create().withTitle("Article Alpha").build(),
  *                 ArticleGenerator.create().withTitle("Article Beta").build()
@@ -68,13 +64,20 @@ import java.util.stream.IntStream;
  *         VisitorCommands.visitArticleFeed(page, mocker, articles);
  *         assertThat(new ArticleFeedPage(page).getTitleAtRow(0)).isEqualTo("Article Alpha");
  *     }
+ *
+ *     @Test
+ *     void reusePrebuiltModelForBothNavigationAndAssertion(Page page, RequestMocker mocker) {
+ *         // Build the model once and use it for both navigation and expected-value assertion.
+ *         ArticleModel article = ArticleGenerator.create().withTitle("Reused Model").build();
+ *         VisitorCommands.visitArticleDetail(page, mocker, article);
+ *         assertThat(new ArticleDetailPage(page).getTitle()).isEqualTo(article.title());
+ *     }
  * }
  * }</pre>
  *
  * <h2>Usage in Cucumber (via NavigationSteps)</h2>
  * <pre>{@code
- * // NavigationSteps delegates to VisitorCommands
- * @When("I navigate to the article feed")
+ * @Given("the user is on the article feed page")
  * public void iNavigateToArticleFeed() {
  *     List<ArticleModel> articles = context.getArticles();
  *     if (articles.isEmpty()) {
@@ -83,12 +86,6 @@ import java.util.stream.IntStream;
  *         VisitorCommands.visitArticleFeed(page, mocker, articles);
  *     }
  * }
- * }</pre>
- *
- * <h2>Custom user session</h2>
- * <pre>{@code
- *   VisitorCommands.visitArticleFeed(page, mocker,
- *           UserGenerator.create().withUsername("admin"));
  * }</pre>
  */
 @Slf4j
@@ -102,7 +99,7 @@ public final class VisitorCommands {
 
     /**
      * Navigates to the Article Feed with 10 auto-generated articles.
-     * Zero-config — no setup required.
+     * Zero-config — no setup required. Auth bootstrap mocks are always registered.
      */
     public static void visitArticleFeed(Page page, RequestMocker mocker) {
         log.debug("[COMMANDS] visitArticleFeed (default 10 articles)");
@@ -135,8 +132,8 @@ public final class VisitorCommands {
     }
 
     /**
-     * Navigates to the Article Feed with a custom authenticated user.
-     * Use when the feed content depends on user identity (personalized feed).
+     * Navigates to the Article Feed with a custom authenticated user session.
+     * Use when the feed content or header UI depends on user identity.
      *
      * @param userGen the user generator for the current session
      */
@@ -157,6 +154,7 @@ public final class VisitorCommands {
 
     /**
      * Navigates to the Article Detail page with a zero-config auto-generated article.
+     * Auth bootstrap mocks are always registered.
      */
     public static void visitArticleDetail(Page page, RequestMocker mocker) {
         log.debug("[COMMANDS] visitArticleDetail (default article)");
@@ -183,7 +181,15 @@ public final class VisitorCommands {
 
     /**
      * Navigates to the Article Detail page for an already-built {@link ArticleModel}.
-     * Use when you need to reuse the same model object for both navigation and assertions.
+     * <p>
+     * Use when you need to reuse the same model object for both navigation and assertions
+     * without calling {@code .build()} again and risking field drift.
+     * </p>
+     * <p>
+     * Internally converts the model back to a generator via
+     * {@link ArticleGenerator#fromModel(ArticleModel)} so the Visitor receives
+     * the consistent generator type it expects.
+     * </p>
      *
      * @param article the article to display — slug is used for URL construction
      */
@@ -193,9 +199,8 @@ public final class VisitorCommands {
             ArticleModel article
     ) {
         log.debug("[COMMANDS] visitArticleDetail (pre-built article, slug={})", article.slug());
-        ArticleGenerator articleGen = ArticleGenerator.fromModel(article);
         ArticleDetailVisitor.create(page, mocker)
-                .withArticle(articleGen)
+                .withArticle(ArticleGenerator.fromModel(article))
                 .visit();
     }
 }
