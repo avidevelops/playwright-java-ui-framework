@@ -7,9 +7,12 @@ import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Route;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Fluent builder for registering Playwright {@code page.route()} intercepts.
@@ -42,8 +45,9 @@ public class RequestMocker {
 
     private final Page page;
 
-    // Stores every intercepted request by alias for post-scenario inspection.
-    private final ConcurrentHashMap<String, InterceptedRequest> intercepted = new ConcurrentHashMap<>();
+    // Stores every intercepted request by alias — keyed list so multiple hits to the same
+    // endpoint within one scenario are all retained (e.g. pagination, retries).
+    private final ConcurrentHashMap<String, List<InterceptedRequest>> intercepted = new ConcurrentHashMap<>();
 
     // ── Builder state (reset after each terminal call) ──────────────────────
     private String urlPath;
@@ -95,14 +99,59 @@ public class RequestMocker {
 
     // ── Inspection ──────────────────────────────────────────────────────────
 
-    /** Returns the captured request details for an alias (may be null if not yet intercepted). */
-    public InterceptedRequest getIntercepted(String alias) {
-        return intercepted.get(alias);
+    /**
+     * Returns all captured requests for an alias (empty list if none yet).
+     * Useful for asserting on pagination calls or retries.
+     */
+    public List<InterceptedRequest> getIntercepted(String alias) {
+        return intercepted.getOrDefault(alias, List.of());
+    }
+
+    /**
+     * Returns the most recent intercepted request for the alias, or {@code null} if none.
+     * Equivalent to Cypress's {@code cy.wait('@alias')} for single-shot assertions.
+     */
+    public InterceptedRequest getLastIntercepted(String alias) {
+        List<InterceptedRequest> hits = intercepted.get(alias);
+        if (hits == null || hits.isEmpty()) return null;
+        return hits.get(hits.size() - 1);
     }
 
     /** Returns true if at least one request matching {@code alias} was intercepted. */
     public boolean wasIntercepted(String alias) {
-        return intercepted.containsKey(alias);
+        List<InterceptedRequest> hits = intercepted.get(alias);
+        return hits != null && !hits.isEmpty();
+    }
+
+    /**
+     * Blocks until at least one request for {@code alias} has been intercepted, or throws
+     * {@link AssertionError} if the timeout expires.
+     * <p>
+     * Java equivalent of the Cypress subscriber pattern:
+     * {@code var wait = subscribeToX(); triggerAction(); wait();}
+     * — here you call {@code waitForAlias()} AFTER the action.
+     * </p>
+     *
+     * @param alias     the alias registered in the mock chain
+     * @param timeoutMs maximum time to wait in milliseconds
+     * @return the most recent {@link InterceptedRequest} for this alias
+     */
+    public InterceptedRequest waitForAlias(String alias, int timeoutMs) {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            List<InterceptedRequest> hits = intercepted.getOrDefault(alias, List.of());
+            if (!hits.isEmpty()) {
+                return hits.get(hits.size() - 1);
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        throw new AssertionError(
+                "No request intercepted for alias '" + alias + "' within " + timeoutMs + "ms");
     }
 
     // ── Internal ────────────────────────────────────────────────────────────
@@ -130,12 +179,13 @@ public class RequestMocker {
                     .setStatus(capturedStatus)
                     .setHeaders(hdrs)
                     .setBody(body));
-            intercepted.put(registeredAlias, new InterceptedRequest(
-                    route.request().url(),
-                    route.request().method(),
-                    safePostBody(route.request()),
-                    body
-            ));
+            intercepted.computeIfAbsent(registeredAlias, k -> new CopyOnWriteArrayList<>())
+                    .add(new InterceptedRequest(
+                            route.request().url(),
+                            route.request().method(),
+                            safePostBody(route.request()),
+                            body
+                    ));
             log.debug("[MOCK] {} {} → {} (alias={})", method, pattern, capturedStatus, registeredAlias);
         });
 

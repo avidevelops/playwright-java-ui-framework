@@ -3,9 +3,10 @@ package com.example.ui.visitors;
 import com.example.ui.backend.articles.ArticlesMockApi;
 import com.example.ui.backend.articles.generators.ArticleGenerator;
 import com.example.ui.backend.articles.models.ArticleModel;
+import com.example.ui.infrastructure.AppInitMocker;
+import com.example.ui.infrastructure.MockMode;
 import com.example.ui.infrastructure.RequestMocker;
 import com.example.ui.infrastructure.UiConstants;
-import com.example.ui.infrastructure.UiTestExtension;
 import com.example.ui.pages.ArticleDetailPage;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.LoadState;
@@ -37,20 +38,30 @@ public class ArticleDetailVisitor implements PageVisitor {
 
     private final Page page;
     private final RequestMocker mocker;
+    private final MockMode mode;
 
     // Default: a single auto-generated article.
     private ArticleGenerator articleGenerator = ArticleGenerator.create();
 
-    private ArticleDetailVisitor(Page page, RequestMocker mocker) {
+    private ArticleDetailVisitor(Page page, RequestMocker mocker, MockMode mode) {
         this.page = page;
         this.mocker = mocker;
+        this.mode = mode;
     }
 
     public static ArticleDetailVisitor create(Page page, RequestMocker mocker) {
-        return new ArticleDetailVisitor(page, mocker);
+        return new ArticleDetailVisitor(page, mocker, MockMode.resolve());
     }
 
-    /** Override with a specific article generator. The generator's slug drives both mock URL and navigation URL. */
+    /**
+     * Factory with explicit mode — avoids coupling to
+     * {@link com.example.ui.infrastructure.UiTestExtension} ThreadLocal.
+     */
+    public static ArticleDetailVisitor create(Page page, RequestMocker mocker, MockMode mode) {
+        return new ArticleDetailVisitor(page, mocker, mode);
+    }
+
+    /** Override with a specific article generator. The generator’s slug drives both mock URL and navigation URL. */
     public ArticleDetailVisitor withArticle(ArticleGenerator generator) {
         this.articleGenerator = generator;
         return this;
@@ -61,12 +72,18 @@ public class ArticleDetailVisitor implements PageVisitor {
         // Build once — slug is used for both the mock intercept path and the navigation URL.
         ArticleModel article = articleGenerator.build();
 
-        if (UiTestExtension.getMode().isMocked()) {
+        if (mode.isMocked()) {
+            AppInitMocker.mock(mocker);
             new ArticlesMockApi(mocker).mockGetArticle(article);
         }
 
         page.navigate(UiConstants.BASE_URL + ArticleDetailPage.pathFor(article.slug()));
         page.waitForLoadState(LoadState.NETWORKIDLE);
         log.debug("[VISITOR] Article detail loaded (slug={})", article.slug());
+    }
+
+    @Override
+    public String pageUrl() {
+        return UiConstants.BASE_URL + ArticleDetailPage.pathFor(articleGenerator.getSlug());
     }
 }

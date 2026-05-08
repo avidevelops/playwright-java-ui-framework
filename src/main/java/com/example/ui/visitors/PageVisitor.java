@@ -13,5 +13,15 @@ package com.example.ui.visitors;
  * </p>
  */
 public interface PageVisitor {
+    /**
+     * Registers all required mocks (if in MOCK mode), then navigates to {@link #pageUrl()}.
+     * This is the single entry point tests use for page navigation.
+     */
     void visit();
+
+    /**
+     * Returns the fully-qualified URL for this page (e.g., {@code "http://localhost:4100/"}).
+     * Useful for logging, assertions on {@code page.url()}, and {@link com.example.ui.support.VisitorCommands}.
+     */
+    String pageUrl();
 }
