@@ -23,6 +23,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       .withTitle("How to Use Playwright")
  *       .withAuthorUsername("jane-doe")
  *       .build();
+ *
+ *   // Reconstruct a generator from an already-built model (e.g. for re-use in Visitors)
+ *   ArticleGenerator gen = ArticleGenerator.fromModel(existingArticleModel);
  * }</pre>
  */
 public class ArticleGenerator {
@@ -66,6 +69,37 @@ public class ArticleGenerator {
         return new ArticleGenerator();
     }
 
+    /**
+     * Reconstructs a generator from an already-built {@link ArticleModel}.
+     * <p>
+     * Use this when you have a model object and need to pass it to a Visitor that
+     * expects a generator (e.g. {@code VisitorCommands.visitArticleDetail(page, mocker, article)}).
+     * The returned generator has all fields pre-loaded from the model; calling
+     * {@link #build()} on it will produce an identical model.
+     * </p>
+     *
+     * @param model a previously built {@link ArticleModel}
+     * @return a fully initialised generator whose {@code build()} reproduces the model
+     */
+    public static ArticleGenerator fromModel(ArticleModel model) {
+        ArticleGenerator gen = new ArticleGenerator(); // sets counter-based defaults
+        gen.slug           = model.slug();
+        gen.title          = model.title();
+        gen.description    = model.description();
+        gen.body           = model.body();
+        gen.tagList        = model.tagList();
+        gen.createdAt      = model.createdAt();
+        gen.updatedAt      = model.updatedAt();
+        gen.favorited      = model.favorited();
+        gen.favoritesCount = model.favoritesCount();
+        if (model.author() != null) {
+            gen.authorUsername = model.author().username();
+            gen.authorBio      = model.author().bio();
+            gen.authorImage    = model.author().image();
+        }
+        return gen;
+    }
+
     // ── Fluent setters ──────────────────────────────────────────────────────
 
     public ArticleGenerator withSlug(String slug)                 { this.slug = slug;                   return this; }
@@ -79,7 +113,7 @@ public class ArticleGenerator {
     public ArticleGenerator withAuthorUsername(String username)   { this.authorUsername = username;     return this; }
     public ArticleGenerator withAuthorBio(String bio)             { this.authorBio = bio;               return this; }
 
-    /** Getter used by NavigationSteps to determine the URL path for navigation. */
+    /** Getter used by NavigationSteps / VisitorCommands to determine the URL path for navigation. */
     public String getSlug() { return slug; }
 
     // ── Build ────────────────────────────────────────────────────────────────
