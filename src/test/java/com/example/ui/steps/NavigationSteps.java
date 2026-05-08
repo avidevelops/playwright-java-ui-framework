@@ -5,8 +5,7 @@ import com.example.ui.infrastructure.RequestMocker;
 import com.example.ui.infrastructure.UiConstants;
 import com.example.ui.infrastructure.UiTestExtension;
 import com.example.ui.pages.ArticleFeedPage;
-import com.example.ui.visitors.ArticleDetailVisitor;
-import com.example.ui.visitors.ArticleFeedVisitor;
+import com.example.ui.support.VisitorCommands;
 import com.microsoft.playwright.Page;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.When;
@@ -15,18 +14,24 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Navigation step definitions for UI tests.
  * <p>
- * Each step:
- * <ol>
- *   <li>Creates the appropriate Visitor</li>
- *   <li>Checks {@link ScenarioContext} for any overrides and passes them to the Visitor</li>
- *   <li>Calls {@code visitor.visit()} — which registers mocks (if in mock mode) and navigates</li>
- * </ol>
+ * Each step delegates to {@link VisitorCommands} — the single authoritative entry-point
+ * for page navigation. Step definitions never instantiate Visitor classes directly;
+ * they only read from {@link ScenarioContext} to decide which overload of
+ * {@code VisitorCommands.visit*()} to call.
  * </p>
  *
+ * <h3>Why delegate to VisitorCommands?</h3>
+ * <ul>
+ *   <li>Keeps the {@link VisitorCommands} facade as the single source of truth for
+ *       default data generation logic — no duplication between Cucumber and JUnit 5 paths.</li>
+ *   <li>Ensures {@link com.example.ui.infrastructure.AppInitMocker} is always wired in,
+ *       since {@code VisitorCommands} calls visitors that include it.</li>
+ *   <li>Makes step definitions trivially small — they only resolve context and delegate.</li>
+ * </ul>
+ *
  * <h3>Null-safety rule:</h3>
- * Always null-check context fields before passing to {@code with*()} methods.
- * Visitors initialise their own safe defaults in the constructor, so it is always
- * safe to skip the override — the Visitor will still work correctly.
+ * Always null-check context fields before branching. Passing {@code null} to
+ * {@code VisitorCommands} is never safe — use the no-arg overload as the fallback.
  */
 @Slf4j
 public class NavigationSteps {
@@ -42,15 +47,15 @@ public class NavigationSteps {
         Page page = UiTestExtension.getPage();
         RequestMocker mocker = UiTestExtension.getMocker();
 
-        ArticleFeedVisitor visitor = ArticleFeedVisitor.create(page, mocker);
-
-        // Only override if MockSetupSteps configured specific articles.
-        // Otherwise the Visitor's default (10 auto-generated articles) is used.
         if (!context.getArticles().isEmpty()) {
-            visitor.withArticles(context.getArticles());
+            // Scenario configured specific articles via MockSetupSteps — use them.
+            log.debug("[NAV] Visiting feed with {} configured articles", context.getArticles().size());
+            VisitorCommands.visitArticleFeed(page, mocker, context.getArticles());
+        } else {
+            // No setup step ran — use zero-config default (10 auto-generated articles).
+            log.debug("[NAV] Visiting feed with zero-config defaults");
+            VisitorCommands.visitArticleFeed(page, mocker);
         }
-
-        visitor.visit();
     }
 
     @Given("the user is on the article detail page for {string}")
@@ -58,17 +63,17 @@ public class NavigationSteps {
         Page page = UiTestExtension.getPage();
         RequestMocker mocker = UiTestExtension.getMocker();
 
-        ArticleDetailVisitor visitor = ArticleDetailVisitor.create(page, mocker);
-
         if (context.getArticleGenerator() != null) {
-            // Use the generator configured by MockSetupSteps (has specific slug/title/author).
-            visitor.withArticle(context.getArticleGenerator());
+            // MockSetupSteps configured a specific generator (has slug/title/author set).
+            log.debug("[NAV] Visiting detail with configured generator (slug={})",
+                    context.getArticleGenerator().getSlug());
+            VisitorCommands.visitArticleDetail(page, mocker, context.getArticleGenerator());
         } else {
-            // No setup step ran — create a minimal generator from the slug in the step.
-            visitor.withArticle(ArticleGenerator.create().withSlug(slug));
+            // No setup step ran — create a minimal generator from the Gherkin step slug.
+            log.debug("[NAV] Visiting detail with step slug '{}'", slug);
+            VisitorCommands.visitArticleDetail(page, mocker,
+                    ArticleGenerator.create().withSlug(slug));
         }
-
-        visitor.visit();
     }
 
     @When("the user navigates back to the feed")
@@ -76,5 +81,6 @@ public class NavigationSteps {
         Page page = UiTestExtension.getPage();
         page.navigate(UiConstants.BASE_URL + ArticleFeedPage.PATH);
         page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE);
+        log.debug("[NAV] Navigated back to feed");
     }
 }
