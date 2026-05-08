@@ -22,6 +22,30 @@ public class ArticleSteps {
         this.context = context;
     }
 
+    // The subscriber pattern - subscriber is registered BEFORE the action, called AFTER
+    @When("the user publishes the article")
+    public void theUserPublishesTheArticle() {
+        // Register subscriber BEFORE triggering the action
+        Supplier<Response> waitForPublish = Subscribers.subscribeToPublishArticle(
+            context.getMocker(),
+            context.getArticle().getId()
+        );
+        context.setPublishSubscriber(waitForPublish); // store on context for Then step
+    
+        articlePage.clickPublishButton();
+    }
+    
+    @Then("the publish request is sent with status {string}")
+    public void thePublishRequestIsSentWithStatus(String expectedStatus) {
+        // Call the subscriber AFTER the action — waits for the intercepted request
+        Response response = context.getPublishSubscriber().get();
+        assertThat(response.status()).isEqualTo(200);
+    
+        // Assert request body if needed
+        String requestBody = response.request().postData();
+        assertThat(requestBody).contains(expectedStatus);
+    }
+
     // ── Article feed assertions ───────────────────────────────────────────────
 
     @Then("the article feed is visible")
